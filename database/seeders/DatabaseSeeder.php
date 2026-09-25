@@ -3,6 +3,9 @@
 namespace Database\Seeders;
 
 // use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use App\Models\AuthorityModel;
+use App\Models\UrlModel;
+use App\Models\User;
 use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
@@ -12,11 +15,34 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // \App\Models\User::factory(10)->create();
+        $data = User::firstOrCreate(
+            ['email' => 'superadmin@gomecogroup.com'],
+            [
+                'name' => 'Super Admin',
+                'identification' => '5sfg4s4f8wb1x',
+                'password' => 'GMC)^$2024',
+                'active' => 1,
+            ]
+        );
 
-        // \App\Models\User::factory()->create([
-        //     'name' => 'Test User',
-        //     'email' => 'test@example.com',
-        // ]);
+        $links = [
+            '/',
+            'mindar',
+            'playground',
+            'dashboard',
+            'sign-in',
+            'sign-out',
+            'profile',
+            'superadmin',
+        ];
+
+        foreach ($links as $linkName) {
+            $link = UrlModel::firstOrCreate(['linkName' => $linkName]);
+
+            AuthorityModel::firstOrCreate([
+                'linkName_id' => $link->id,
+                'user_id' => $data->id,
+            ]);
+        }
     }
 }
