@@ -80,8 +80,9 @@
 .qr-image img {
     display:block;
     width:100%;
-    max-width:176px;
-    aspect-ratio:1;
+    max-width:190px;
+    max-height:240px;
+    object-fit:contain;
     border-radius:8px;
     background:#fff
 }

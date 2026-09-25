@@ -44,6 +44,10 @@
     background:#2563eb;
     color:#fff
 }
+.playground-button:disabled {
+    opacity:.55;
+    cursor:not-allowed
+}
 .playground-actions {
     display:flex;
     flex-wrap:wrap;
@@ -436,8 +440,9 @@
             <p>Arrange, select, and manage models in a desktop workspace.</p>
         </div>
         <div class="playground-actions">
+            <button id="save-scene" class="playground-button primary" type="button">Save changes</button>
             <button id="reset-layout" class="playground-button" type="button">Reset layout</button>
-            <button id="download-layout" class="playground-button primary" type="button">Download positions</button>
+            <button id="download-layout" class="playground-button" type="button">Download positions</button>
         </div>
     </div>
 
@@ -490,7 +495,7 @@
                     </div>
                 </div>
             @endforeach
-            <p id="property-note" class="panel-note">Select an object to edit it. Changes are saved in this browser.</p>
+            <p id="property-note" class="panel-note">Select an object to edit it. Use Save changes to store the scene.</p>
         </aside>
     </div>
 
@@ -519,6 +524,7 @@
             }
         }
     </script>
+    <script src="/vendor/mindar/mindar-image-compiler-1.1.5.prod.js"></script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -526,10 +532,17 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         const modelLibrary = @json($modelLibrary->values());
+        const savedScene = @json($sceneObjects->values());
+        const hasSavedScene = @json($playground->scene_saved_at !== null);
+        const serverSavedAt = Date.parse(@json($playground->scene_saved_at?->toIso8601String())) || 0;
+        const saveUrl = @json(route('mind-ar.playground.build', $playground, false));
+        const qrTargetUrl = @json($qrTargetUrl);
+        let mindTargetReady = @json($mindTargetReady);
+        const csrfToken = @json(csrf_token());
         const assetsByKey = new Map(modelLibrary.map(asset => [asset.key, asset]));
         const defaultAssetKey = modelLibrary[0]?.key ?? null;
-        const storageKey = 'mindar-playground-layout-v2';
-        const legacyStorageKey = 'mindar-playground-layout-v1';
+        const storageKey = @json('mindar-playground-'.$playground->qr_token.'-draft-v3');
+        const legacyStorageKey = 'mindar-playground-layout-v2';
         const defaults = [-2.3, 0, 2.3].map((x, index) => ({
             id: `object-${index + 1}`,
             name: `Model ${index + 1}`,
@@ -547,6 +560,7 @@
         const selectionMarquee = document.getElementById('selection-marquee');
         const objectLibraryDialog = document.getElementById('object-library');
         const propertyNote = document.getElementById('property-note');
+        const saveButton = document.getElementById('save-scene');
         const inputs = [...document.querySelectorAll('[data-property][data-axis]')];
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
@@ -603,6 +617,10 @@
         let historyBaseState = null;
         let historyIndex = 0;
         let historyBusy = false;
+        let initialLayoutDirty = !hasSavedScene;
+        let isDirty = initialLayoutDirty;
+        let saveInProgress = false;
+        let backgroundSaveQueued = false;
         const historyEntries = [];
 
         function hasVector(value, positive = false) {
@@ -612,31 +630,42 @@
         }
 
         function validRecord(record) {
-            return record && assetsByKey.has(record.asset) && hasVector(record.position) &&
+            return record && typeof record.id === 'string' && typeof record.name === 'string' &&
+                assetsByKey.has(record.asset) && hasVector(record.position) &&
                 hasVector(record.rotation) && hasVector(record.scale, true);
         }
 
         function readLayout() {
             try {
                 const saved = JSON.parse(localStorage.getItem(storageKey));
-                if (saved && Array.isArray(saved.objects) && saved.objects.every(validRecord)) {
+                const isNewerThanServer = !saved?.updatedAt || Number(saved.updatedAt) > serverSavedAt;
+                if (saved?.dirty === true && isNewerThanServer && Array.isArray(saved.objects) && saved.objects.every(validRecord)) {
                     nextObjectId = Math.max(1, Number(saved.nextObjectId) || 1);
+                    initialLayoutDirty = true;
                     return saved.objects;
-                }
-
-                const legacy = JSON.parse(localStorage.getItem(legacyStorageKey));
-                if (defaultAssetKey && Array.isArray(legacy) && legacy.every(item =>
-                    hasVector(item?.position) && hasVector(item?.rotation) && hasVector(item?.scale, true)
-                )) {
-                    return legacy.map((item, index) => ({
-                        ...item,
-                        id: `object-${index + 1}`,
-                        name: `Model ${index + 1}`,
-                        asset: defaultAssetKey
-                    }));
                 }
             } catch { /* Ignore invalid or unavailable browser storage. */ }
 
+            if (hasSavedScene && savedScene.every(validRecord)) {
+                nextObjectId = Math.max(1, savedScene.reduce((highest, object) => {
+                    const number = Number(String(object.id).match(/(\d+)$/)?.[1] ?? 0);
+                    return Math.max(highest, number + 1);
+                }, 1));
+                initialLayoutDirty = false;
+                return savedScene;
+            }
+
+            try {
+                const legacy = JSON.parse(localStorage.getItem(legacyStorageKey));
+                if (!hasSavedScene && legacy && Array.isArray(legacy.objects) && legacy.objects.every(validRecord)) {
+                    nextObjectId = Math.max(1, Number(legacy.nextObjectId) || 1);
+                    initialLayoutDirty = true;
+                    localStorage.removeItem(legacyStorageKey);
+                    return legacy.objects;
+                }
+            } catch { /* Ignore invalid or unavailable browser storage. */ }
+
+            initialLayoutDirty = !hasSavedScene;
             return defaults.filter(validRecord);
         }
 
@@ -648,7 +677,9 @@
                     ...model.userData.editor,
                     position: model.position.toArray(),
                     rotation: [model.rotation.x, model.rotation.y, model.rotation.z].map(THREE.MathUtils.radToDeg),
-                    scale: model.scale.toArray()
+                    scale: model.scale.toArray(),
+                    visible: model.visible,
+                    locked: Boolean(model.userData.editor.locked)
                 }))
             };
         }
@@ -724,7 +755,154 @@
 
         function saveLayout() {
             if (isHydrating) return;
-            try { localStorage.setItem(storageKey, JSON.stringify(getLayout())); } catch { /* Storage may be disabled. */ }
+            isDirty = true;
+            backgroundSaveQueued = false;
+            updateSaveButton();
+            try {
+                localStorage.setItem(storageKey, JSON.stringify({
+                    ...getLayout(),
+                    dirty: true,
+                    updatedAt: Date.now()
+                }));
+            } catch { /* Storage may be disabled. */ }
+        }
+
+        function updateSaveButton() {
+            saveButton.disabled = saveInProgress || (!isDirty && mindTargetReady);
+            saveButton.textContent = saveInProgress
+                ? 'Saving\u2026'
+                : !mindTargetReady
+                    ? 'Save & prepare AR'
+                    : isDirty
+                        ? 'Save changes'
+                        : 'Saved';
+        }
+
+        async function prepareQrImageTarget() {
+            if (mindTargetReady) return true;
+
+            updateStatus('Preparing QR image target…');
+
+            if (!window.MINDAR?.IMAGE?.Compiler) {
+                throw new Error('The MindAR target compiler could not load. Check the internet connection and reload.');
+            }
+
+            const targetImage = new Image();
+            targetImage.decoding = 'async';
+
+            await new Promise((resolve, reject) => {
+                targetImage.onload = resolve;
+                targetImage.onerror = () => reject(new Error('The QR target image could not be loaded.'));
+                targetImage.src = qrTargetUrl;
+            });
+
+            const compiler = new window.MINDAR.IMAGE.Compiler();
+            await compiler.compileImageTargets([targetImage], progress => {
+                updateStatus(`Preparing QR image target… ${Math.round(progress)}%`);
+            });
+
+            const targetData = await compiler.exportData();
+            const formData = new FormData();
+            formData.append('_token', csrfToken);
+            formData.append('type', 'saveMindTarget');
+            formData.append(
+                'mind_target',
+                new Blob([targetData], { type: 'application/octet-stream' }),
+                @json($playground->qr_token.'.mind')
+            );
+
+            const response = await fetch(saveUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken
+                },
+                credentials: 'same-origin',
+                body: formData
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok) throw new Error(result.message || 'The QR image target could not be saved.');
+
+            mindTargetReady = true;
+            updateStatus('QR image target ready.');
+
+            return true;
+        }
+
+        async function persistScene(background = false) {
+            if (saveInProgress || (!isDirty && mindTargetReady)) return true;
+
+            if (background && backgroundSaveQueued) return true;
+            if (!background) backgroundSaveQueued = false;
+
+            const payload = JSON.stringify({
+                _token: csrfToken,
+                type: 'saveScene',
+                ...getLayout()
+            });
+
+            if (background) {
+                if (!isDirty) return true;
+
+                const queued = navigator.sendBeacon(saveUrl, new Blob([payload], { type: 'application/json' }));
+
+                if (queued) {
+                    backgroundSaveQueued = true;
+                    return true;
+                }
+
+                fetch(saveUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken
+                    },
+                    credentials: 'same-origin',
+                    keepalive: true,
+                    body: payload
+                }).catch(() => {});
+                backgroundSaveQueued = true;
+                return false;
+            }
+
+            saveInProgress = true;
+            updateSaveButton();
+            updateStatus('Saving playground\u2026');
+
+            try {
+                if (isDirty) {
+                    const response = await fetch(saveUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': csrfToken
+                        },
+                        credentials: 'same-origin',
+                        body: payload
+                    });
+                    const result = await response.json().catch(() => ({}));
+
+                    if (!response.ok) throw new Error(result.message || 'The playground could not be saved.');
+
+                    isDirty = false;
+                    backgroundSaveQueued = false;
+                    try { localStorage.removeItem(storageKey); } catch { /* Storage may be disabled. */ }
+                }
+
+                await prepareQrImageTarget();
+                updateStatus('Playground saved. QR image target is ready.');
+                return true;
+            } catch (error) {
+                console.error('Could not save the playground:', error);
+                updateStatus(error.message || 'The playground could not be saved.');
+                return false;
+            } finally {
+                saveInProgress = false;
+                updateSaveButton();
+            }
         }
 
         function loadSource(assetKey) {
@@ -751,7 +929,13 @@
             contents.position.set(-center.x * unit, -box.min.y * unit, -center.z * unit);
 
             const root = new THREE.Group();
-            root.userData.editor = { id: record.id, name: record.name, asset: record.asset };
+            root.userData.editor = {
+                id: record.id,
+                name: record.name,
+                asset: record.asset,
+                locked: Boolean(record.locked)
+            };
+            root.visible = record.visible !== false;
             root.position.fromArray(record.position);
             root.rotation.set(...record.rotation.map(THREE.MathUtils.degToRad));
             root.scale.fromArray(record.scale);
@@ -771,7 +955,7 @@
             models.splice(0);
         }
 
-        async function replaceScene(records) {
+        async function replaceScene(records, trackChange = true) {
             isHydrating = true;
             removeAllModels();
             try {
@@ -781,7 +965,7 @@
             }
             renderSceneList();
             setSelection(models.length ? [models[0]] : []);
-            saveLayout();
+            if (trackChange) saveLayout();
         }
 
         function updateStatus(message = null) {
@@ -942,8 +1126,8 @@
             propertyNote.textContent = selected.length > 1
                 ? 'The gizmo and property changes apply to every selected object.'
                 : selected.length === 1
-                    ? 'Changes are saved in this browser. Download positions to keep a JSON copy.'
-                    : 'Select an object to edit it. Changes are saved in this browser.';
+                    ? 'Changes are pending. Use Save changes to store them in the database.'
+                    : 'Select an object to edit it. Use Save changes to store the scene.';
             inputs.forEach(input => {
                 const { property, axis } = input.dataset;
                 input.disabled = selected.length === 0;
@@ -1023,6 +1207,7 @@
             });
         });
 
+        saveButton.addEventListener('click', () => persistScene());
         document.getElementById('reset-layout').addEventListener('click', async () => {
             if (historyBusy) return;
             const before = captureSceneState();
@@ -1044,6 +1229,11 @@
             link.click();
             setTimeout(() => URL.revokeObjectURL(link.href), 1000);
         });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') persistScene(true);
+        });
+        window.addEventListener('pagehide', () => persistScene(true));
 
         window.addEventListener('keydown', event => {
             const editingText = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
@@ -1251,14 +1441,18 @@
                 renderSceneList();
                 historyBaseState = captureSceneState();
                 renderHistory();
+                isDirty = initialLayoutDirty;
+                updateSaveButton();
                 updateStatus('No GLTF or GLB models found.');
                 return;
             }
             try {
-                await replaceScene(readLayout());
+                await replaceScene(readLayout(), false);
                 historyBaseState = captureSceneState();
                 historyIndex = 0;
                 renderHistory();
+                isDirty = initialLayoutDirty;
+                updateSaveButton();
                 } catch (error) {
                 console.error('Could not load the playground scene:', error);
                 updateStatus('Could not load the scene. Check the model assets and reload.');

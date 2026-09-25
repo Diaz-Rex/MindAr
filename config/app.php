@@ -56,6 +56,8 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
+    'playground_public_url' => env('PLAYGROUND_PUBLIC_URL', env('APP_URL', 'http://localhost')),
+
     'asset_url' => env('ASSET_URL', '/'),
 
     /*

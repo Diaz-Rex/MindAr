@@ -7,7 +7,6 @@ use App\Http\Controllers\PlayGroundController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SessionsController;
 use App\Http\Controllers\ZohoMainController;
-use App\Http\Middleware\ForceMindArHttps;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -29,8 +28,11 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/sign-in', [SessionsController::class, 'create'])->middleware('guest')->name('login');
 Route::post('/sign-in', [SessionsController::class, 'store'])->middleware('guest');
-Route::get('/mindar', [MindArController::class, 'index'])->middleware(ForceMindArHttps::class)->name('mind-ar.index');
-Route::get('/mindar/{playground:qr_token}', [MindArController::class, 'index'])->middleware(ForceMindArHttps::class)->name('mind-ar.playground.viewer');
+Route::get('/mindar', [MindArController::class, 'index'])->name('mind-ar.index');
+Route::get('/mindar/{playground:qr_token}/target.png', [MindArController::class, 'index'])
+    ->defaults('type', 'targetImage')
+    ->name('mind-ar.playground.target-image');
+Route::get('/mindar/{playground:qr_token}', [MindArController::class, 'index'])->name('mind-ar.playground.viewer');
 
 /*
 |--------------------------------------------------------------------------
@@ -52,6 +54,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/playground', [PlayGroundController::class, 'lobby'])->name('mind-ar.playground');
     Route::post('/playground', [PlayGroundController::class, 'lobby']);
     Route::get('/playground/{playground:qr_token}/build', [PlayGroundController::class, 'index'])->name('mind-ar.playground.build');
+    Route::post('/playground/{playground:qr_token}/build', [PlayGroundController::class, 'index']);
     Route::get('/zoho/auth', [ZohoMainController::class, 'redirectToZoho'])->name('zoho.auth');
     Route::get('/zoho/callback', [ZohoMainController::class, 'handleCallback'])->name('zoho.callback');
 });

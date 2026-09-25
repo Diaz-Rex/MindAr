@@ -20,7 +20,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // HTTPS URL generation for MindAR is scoped to its route middleware.
+        //   \URL::forceScheme('https');
         // Paginator::useBootstrapFive(); 
     }
 }
