@@ -9,7 +9,9 @@ use App\Support\PlaygroundQrTarget;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Process;
 
 class PlayGroundController extends Controller
 {
@@ -52,6 +54,36 @@ class PlayGroundController extends Controller
                 'Content-Type' => 'image/png',
                 'Content-Disposition' => 'attachment; filename="'.$fileName.'-qr.png"',
             ]);
+        }
+
+        if ($request->type === 'delete') {
+            $validated = $request->validate([
+                'qr_token' => ['required', 'string', 'size:26'],
+            ]);
+
+            $playground = Playground::where('user_id', auth()->id())
+                ->where('qr_token', $validated['qr_token'])
+                ->firstOrFail();
+            $gltfDirectory = public_path('gltf/playgrounds/'.$playground->qr_token);
+            $mindTargetPaths = collect([
+                $playground->mind_target_path,
+                'mind/playgrounds/'.$playground->qr_token.'.mind',
+            ])->filter()->unique();
+
+            DB::transaction(function () use ($playground) {
+                PlaygroundObject::where('playground_id', $playground->id)->delete();
+                ModelAsset::where('playground_id', $playground->id)->delete();
+                $playground->delete();
+            });
+            File::deleteDirectory($gltfDirectory);
+
+            $mindTargetPaths->each(function ($path) {
+                File::delete(public_path($path));
+            });
+
+            return redirect()
+                ->route('mind-ar.playground')
+                ->with('success', 'Playground deleted.');
         }
 
         if ($request->type === 'store') {
@@ -132,6 +164,228 @@ class PlayGroundController extends Controller
             ]);
         }
 
+        if ($request->type === 'uploadModel') {
+            $validated = $request->validate([
+                'model_files' => ['required', 'array', 'min:1'],
+                'model_files.*' => [
+                    'required',
+                    'file',
+                    function ($attribute, $value, $fail) {
+                        $extension = strtolower($value->getClientOriginalExtension());
+
+                        if (! in_array($extension, ['dwg', 'skp', 'dae', 'glb', 'gltf', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'ktx2', 'basis'], true)) {
+                            $fail('Only DWG, SKP, DAE, GLB, GLTF, BIN, and model texture files can be uploaded.');
+                        }
+                    },
+                ],
+            ]);
+
+            $uploadedFiles = collect($validated['model_files']);
+            $modelFiles = $uploadedFiles->filter(function ($file) {
+                return in_array(strtolower($file->getClientOriginalExtension()), ['dwg', 'skp', 'dae', 'glb', 'gltf'], true);
+            })->values();
+
+            if ($modelFiles->count() !== 1) {
+                return response()->json([
+                    'message' => 'Select exactly one DWG, SKP, DAE, GLB, or GLTF model file.',
+                ], 422);
+            }
+
+            $uploadedNames = $uploadedFiles->map(function ($file) {
+                return basename(str_replace('\\', '/', $file->getClientOriginalName()));
+            });
+
+            if ($uploadedNames->map(fn ($name) => strtolower($name))->unique()->count() !== $uploadedNames->count()) {
+                return response()->json([
+                    'message' => 'The selected files contain duplicate filenames.',
+                ], 422);
+            }
+
+            $modelFile = $modelFiles->first();
+            $sourceExtension = strtolower($modelFile->getClientOriginalExtension());
+            $originalName = pathinfo($modelFile->getClientOriginalName(), PATHINFO_FILENAME);
+            $extension = in_array($sourceExtension, ['dwg', 'skp', 'dae'], true) ? 'glb' : $sourceExtension;
+            $assetKey = Str::ulid().'.'.$extension;
+            $assetDirectory = (string) Str::ulid();
+            $relativeDirectory = 'gltf/playgrounds/'.$playground->qr_token.'/'.$assetDirectory;
+            $modelFileName = in_array($sourceExtension, ['dwg', 'skp', 'dae'], true)
+                ? (Str::slug($originalName) ?: 'model').'.glb'
+                : basename(str_replace('\\', '/', $modelFile->getClientOriginalName()));
+            $relativePath = $relativeDirectory.'/'.$modelFileName;
+            $directory = public_path($relativeDirectory);
+            $fileSize = $uploadedFiles->sum(fn ($file) => $file->getSize() ?: 0);
+            $mimeType = $modelFile->getMimeType();
+            $gltfData = null;
+            $conversionDirectory = null;
+            $convertedPath = null;
+
+            if ($sourceExtension === 'gltf') {
+                $gltfData = json_decode(File::get($modelFile->getRealPath()), true);
+
+                if (! is_array($gltfData) || ($gltfData['asset']['version'] ?? null) !== '2.0') {
+                    return response()->json([
+                        'message' => 'The selected GLTF file is not valid glTF 2.0 JSON.',
+                    ], 422);
+                }
+
+                $availableDependencies = $uploadedNames
+                    ->mapWithKeys(fn ($name) => [strtolower($name) => $name]);
+                $missingDependencies = [];
+
+                foreach (['buffers', 'images'] as $section) {
+                    foreach ($gltfData[$section] ?? [] as $index => $resource) {
+                        $uri = $resource['uri'] ?? null;
+
+                        if (! $uri || str_starts_with($uri, 'data:') || preg_match('/^https?:\/\//i', $uri)) {
+                            continue;
+                        }
+
+                        $dependencyName = basename(rawurldecode(parse_url($uri, PHP_URL_PATH) ?: $uri));
+                        $storedName = $availableDependencies->get(strtolower($dependencyName));
+
+                        if (! $storedName) {
+                            $missingDependencies[] = $dependencyName;
+
+                            continue;
+                        }
+
+                        $gltfData[$section][$index]['uri'] = $storedName;
+                    }
+                }
+
+                if ($missingDependencies) {
+                    return response()->json([
+                        'message' => 'Missing GLTF files: '.implode(', ', array_unique($missingDependencies)).'. Select the GLTF and all of its BIN/textures together.',
+                    ], 422);
+                }
+            }
+
+            if (in_array($sourceExtension, ['dwg', 'skp', 'dae'], true)) {
+                if ($uploadedFiles->count() !== 1) {
+                    return response()->json([
+                        'message' => strtoupper($sourceExtension).' conversion accepts one file at a time.',
+                    ], 422);
+                }
+
+                $conversionDirectory = storage_path('app/model-conversions/'.Str::ulid());
+                $sourcePath = $conversionDirectory.DIRECTORY_SEPARATOR.'source.'.$sourceExtension;
+                $convertedPath = $conversionDirectory.DIRECTORY_SEPARATOR.'converted.glb';
+                File::ensureDirectoryExists($conversionDirectory);
+                $modelFile->move($conversionDirectory, basename($sourcePath));
+
+                $nodeBinary = env('NODE_BINARY');
+
+                if (! $nodeBinary && PHP_OS_FAMILY === 'Windows') {
+                    $windowsNode = 'C:\\Program Files\\nodejs\\node.exe';
+
+                    if (File::exists($windowsNode)) {
+                        $nodeBinary = $windowsNode;
+                    }
+                }
+
+                $process = new Process([
+                    $nodeBinary ?: 'node',
+                    '--max-old-space-size=4096',
+                    base_path('scripts/convert-model.mjs'),
+                    $sourcePath,
+                    $convertedPath,
+                ], base_path());
+                $process->setTimeout(180);
+
+                try {
+                    $process->run();
+                } catch (\Throwable $exception) {
+                    Log::warning('Playground model conversion process failed to start.', [
+                        'type' => $sourceExtension,
+                        'message' => $exception->getMessage(),
+                    ]);
+                    File::deleteDirectory($conversionDirectory);
+
+                    return response()->json([
+                        'message' => strtoupper($sourceExtension).' conversion failed: '.$exception->getMessage(),
+                    ], 422);
+                }
+
+                if (! $process->isSuccessful() || ! File::exists($convertedPath)) {
+                    $processError = trim($process->getErrorOutput().PHP_EOL.$process->getOutput());
+                    preg_match('/MODEL_CONVERSION_ERROR:\s*([^\r\n]+)/i', $processError, $conversionErrorMatch);
+                    preg_match('/(?:FATAL\s+)?ERROR:\s*([^\r\n]+)/i', $processError, $fatalErrorMatch);
+                    $firstOutputLine = collect(preg_split('/\r\n|\r|\n/', $processError))
+                        ->map(fn ($line) => trim($line))
+                        ->first(fn ($line) => $line !== '');
+                    $conversionMessage = $conversionErrorMatch[1]
+                        ?? $fatalErrorMatch[1]
+                        ?? $firstOutputLine
+                        ?? 'The converter stopped with exit code '.$process->getExitCode().'.';
+                    $conversionMessage = Str::limit($conversionMessage, 500, '...');
+
+                    Log::warning('Playground model conversion failed.', [
+                        'type' => $sourceExtension,
+                        'exit_code' => $process->getExitCode(),
+                        'output' => Str::limit($processError, 4000, '...'),
+                    ]);
+                    File::deleteDirectory($conversionDirectory);
+
+                    return response()->json([
+                        'message' => strtoupper($sourceExtension).' conversion failed: '.$conversionMessage,
+                    ], 422);
+                }
+
+                $fileSize = File::size($convertedPath);
+                $mimeType = 'model/gltf-binary';
+            }
+
+            File::ensureDirectoryExists($directory);
+
+            try {
+                if ($convertedPath) {
+                    File::copy($convertedPath, $directory.DIRECTORY_SEPARATOR.$modelFileName);
+                } else {
+                    foreach ($uploadedFiles as $uploadedFile) {
+                        $uploadedName = basename(str_replace('\\', '/', $uploadedFile->getClientOriginalName()));
+
+                        if ($uploadedFile === $modelFile && $gltfData !== null) {
+                            File::put(
+                                $directory.DIRECTORY_SEPARATOR.$uploadedName,
+                                json_encode($gltfData, JSON_UNESCAPED_SLASHES)
+                            );
+                        } else {
+                            $uploadedFile->move($directory, $uploadedName);
+                        }
+                    }
+                }
+
+                $modelAsset = new ModelAsset;
+                $modelAsset->user_id = auth()->id();
+                $modelAsset->playground_id = $playground->id;
+                $modelAsset->name = Str::limit(Str::headline($originalName), 100, '');
+                $modelAsset->file_name = $assetKey;
+                $modelAsset->file_path = $relativePath;
+                $modelAsset->file_type = $extension;
+                $modelAsset->mime_type = $mimeType;
+                $modelAsset->file_size = $fileSize;
+                $modelAsset->active = true;
+                $modelAsset->save();
+            } catch (\Throwable $exception) {
+                File::deleteDirectory($directory);
+
+                throw $exception;
+            } finally {
+                if ($conversionDirectory) {
+                    File::deleteDirectory($conversionDirectory);
+                }
+            }
+
+            return response()->json([
+                'message' => 'Model uploaded.',
+                'asset' => [
+                    'key' => $modelAsset->file_name,
+                    'label' => $modelAsset->name,
+                    'url' => asset($modelAsset->file_path),
+                ],
+            ]);
+        }
+
         $assetPaths = collect(glob(public_path('gltf/*.{gltf,glb}'), GLOB_BRACE))
             ->sort()
             ->values();
@@ -145,6 +399,8 @@ class PlayGroundController extends Controller
             }
 
             $modelAsset->name = Str::headline(pathinfo($path, PATHINFO_FILENAME));
+            $modelAsset->user_id = null;
+            $modelAsset->playground_id = null;
             $modelAsset->file_name = $fileName;
             $modelAsset->file_path = 'gltf/'.$fileName;
             $modelAsset->file_type = strtolower(pathinfo($path, PATHINFO_EXTENSION));
@@ -179,6 +435,10 @@ class PlayGroundController extends Controller
                 ->values();
             $modelAssets = ModelAsset::whereIn('file_name', $assetKeys)
                 ->where('active', true)
+                ->where(function ($query) use ($playground) {
+                    $query->whereNull('playground_id')
+                        ->orWhere('playground_id', $playground->id);
+                })
                 ->get()
                 ->keyBy('file_name');
 
@@ -223,6 +483,10 @@ class PlayGroundController extends Controller
         }
 
         $modelLibrary = ModelAsset::where('active', true)
+            ->where(function ($query) use ($playground) {
+                $query->whereNull('playground_id')
+                    ->orWhere('playground_id', $playground->id);
+            })
             ->orderBy('name')
             ->get()
             ->filter(fn (ModelAsset $modelAsset) => is_file(public_path($modelAsset->file_path)))

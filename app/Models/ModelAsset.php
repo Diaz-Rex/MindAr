@@ -10,6 +10,7 @@ class ModelAsset extends Model
 {
     protected $fillable = [
         'user_id',
+        'playground_id',
         'name',
         'file_name',
         'file_path',
@@ -22,6 +23,7 @@ class ModelAsset extends Model
 
     protected $casts = [
         'user_id' => 'integer',
+        'playground_id' => 'integer',
         'file_size' => 'integer',
         'active' => 'boolean',
     ];
@@ -29,6 +31,11 @@ class ModelAsset extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function playground(): BelongsTo
+    {
+        return $this->belongsTo(Playground::class);
     }
 
     public function playgroundObjects(): HasMany

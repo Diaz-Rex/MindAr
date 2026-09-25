@@ -25,8 +25,8 @@ class MindArController extends Controller
             ]);
         }
 
-        $targetReady = ! $playground;
-        $targetPath = 'mind/Model.mind';
+        $targetReady = false;
+        $targetPath = null;
 
         if ($playground &&
             $playground->mind_target_version === PlaygroundQrTarget::VERSION &&
@@ -37,7 +37,7 @@ class MindArController extends Controller
         }
 
         $mindArConfig = [
-            'target' => asset($targetPath),
+            'target' => $targetPath ? asset($targetPath) : null,
             'target_ready' => $targetReady,
             'scene_scale' => 0.18,
         ];
@@ -64,15 +64,7 @@ class MindArController extends Controller
                     'scale' => [$object->scale_x, $object->scale_y, $object->scale_z],
                 ]);
         } else {
-            $sceneObjects = collect([[
-                'id' => 'default-model',
-                'name' => 'Model',
-                'asset_id' => 'default',
-                'asset_url' => asset('gltf/Model.gltf'),
-                'position' => [0, 0, 0],
-                'rotation' => [0, 0, 0],
-                'scale' => [1, 1, 1],
-            ]]);
+            $sceneObjects = collect();
         }
 
         $modelAssets = $sceneObjects

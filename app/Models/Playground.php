@@ -43,4 +43,9 @@ class Playground extends Model
     {
         return $this->hasMany(PlaygroundObject::class);
     }
+
+    public function modelAssets(): HasMany
+    {
+        return $this->hasMany(ModelAsset::class);
+    }
 }

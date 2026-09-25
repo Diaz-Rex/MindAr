@@ -8,5 +8,12 @@
         "axios": "^1.1.2",
         "laravel-vite-plugin": "^0.7.2",
         "vite": "^4.0.0"
+    },
+    "dependencies": {
+        "@xmldom/xmldom": "^0.9.12",
+        "dwg2dxf-converter": "^1.0.4",
+        "openskp": "^1.3.0",
+        "three": "^0.160.1",
+        "three-dxf-loader": "^5.5.0"
     }
 }

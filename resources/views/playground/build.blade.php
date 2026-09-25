@@ -373,6 +373,69 @@
     color:#17376e;
     font-size:18px
 }
+.library-header-actions {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-left:auto
+}
+.library-upload-input {
+    display:none
+}
+.library-upload-note {
+    margin:0;
+    padding:12px 18px 0;
+    color:#64748b;
+    font-size:11px
+}
+.model-upload-progress {
+    margin:12px 18px 0;
+    padding:11px 12px;
+    border:1px solid #cfe1fb;
+    border-radius:10px;
+    background:#f8fbff
+}
+.model-upload-progress[hidden] {
+    display:none
+}
+.upload-progress-copy {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:7px;
+    color:#29466b;
+    font-size:12px;
+    font-weight:700
+}
+.upload-progress-track {
+    height:9px;
+    overflow:hidden;
+    border-radius:999px;
+    background:#dbeafe
+}
+.upload-progress-bar {
+    width:0;
+    height:100%;
+    border-radius:inherit;
+    background:linear-gradient(90deg,#2563eb,#38bdf8);
+    transition:width .16s ease
+}
+.model-upload-progress.is-processing .upload-progress-bar {
+    background:linear-gradient(90deg,#2563eb 0%,#7dd3fc 45%,#2563eb 100%);
+    background-size:200% 100%;
+    animation:upload-processing 1.1s linear infinite
+}
+.model-upload-progress.is-error {
+    border-color:#fecaca;
+    background:#fff7f7
+}
+.model-upload-progress.is-error .upload-progress-bar {
+    background:#ef4444
+}
+@keyframes upload-processing {
+    to { background-position:-200% 0 }
+}
 .library-close {
     width:34px;
     height:34px;
@@ -502,16 +565,30 @@
     <dialog id="object-library" class="object-library" aria-labelledby="object-library-title">
         <div class="library-header">
             <h2 id="object-library-title">Add an object</h2>
-            <button id="close-object-library" class="library-close" type="button" aria-label="Close">&times;</button>
+            <div class="library-header-actions">
+                <button id="upload-model" class="playground-button primary" type="button">Upload model</button>
+                <input id="upload-model-file" class="library-upload-input" type="file" accept=".dwg,.skp,.dae,.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.gif,.ktx2,.basis" multiple>
+                <button id="close-object-library" class="library-close" type="button" aria-label="Close">&times;</button>
+            </div>
         </div>
-        <div class="library-grid">
+        <p class="library-upload-note">DWG, SKP, DAE, or GLB: select one file. GLTF: select the .gltf, .bin, and texture files together.</p>
+        <div id="model-upload-progress" class="model-upload-progress" hidden>
+            <div class="upload-progress-copy">
+                <span id="model-upload-progress-label">Preparing upload...</span>
+                <span id="model-upload-progress-percent">0%</span>
+            </div>
+            <div id="model-upload-progress-track" class="upload-progress-track" role="progressbar" aria-label="Model upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="model-upload-progress-bar" class="upload-progress-bar"></div>
+            </div>
+        </div>
+        <div id="model-library-grid" class="library-grid">
             @forelse ($modelLibrary as $asset)
                 <button class="library-card" type="button" data-add-asset="{{ $asset['key'] }}">
                     <span class="library-card-icon" aria-hidden="true">&#11041;</span>
                     {{ $asset['label'] }}
                 </button>
             @empty
-                <p class="panel-note">No GLTF or GLB models were found.</p>
+                <p id="model-library-empty" class="panel-note">No uploaded models were found.</p>
             @endforelse
         </div>
     </dialog>
@@ -559,6 +636,14 @@
         const redoButton = document.getElementById('redo-change');
         const selectionMarquee = document.getElementById('selection-marquee');
         const objectLibraryDialog = document.getElementById('object-library');
+        const modelLibraryGrid = document.getElementById('model-library-grid');
+        const uploadModelButton = document.getElementById('upload-model');
+        const uploadModelFile = document.getElementById('upload-model-file');
+        const modelUploadProgress = document.getElementById('model-upload-progress');
+        const modelUploadProgressLabel = document.getElementById('model-upload-progress-label');
+        const modelUploadProgressPercent = document.getElementById('model-upload-progress-percent');
+        const modelUploadProgressTrack = document.getElementById('model-upload-progress-track');
+        const modelUploadProgressBar = document.getElementById('model-upload-progress-bar');
         const propertyNote = document.getElementById('property-note');
         const saveButton = document.getElementById('save-scene');
         const inputs = [...document.querySelectorAll('[data-property][data-axis]')];
@@ -1412,11 +1497,144 @@
         objectLibraryDialog.addEventListener('click', event => {
             if (event.target === objectLibraryDialog) objectLibraryDialog.close();
         });
-        document.querySelectorAll('[data-add-asset]').forEach(button => {
+        function bindLibraryCard(button) {
             button.addEventListener('click', () => {
                 objectLibraryDialog.close();
                 addObject(button.dataset.addAsset);
             });
+        }
+
+        document.querySelectorAll('[data-add-asset]').forEach(bindLibraryCard);
+
+        let uploadProgressHideTimer = null;
+
+        function setModelUploadProgress(percent, label, state = 'uploading') {
+            const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+            clearTimeout(uploadProgressHideTimer);
+            modelUploadProgress.hidden = false;
+            modelUploadProgress.classList.toggle('is-processing', state === 'processing');
+            modelUploadProgress.classList.toggle('is-error', state === 'error');
+            modelUploadProgressLabel.textContent = label;
+            modelUploadProgressPercent.textContent = `${safePercent}%`;
+            modelUploadProgressBar.style.width = `${safePercent}%`;
+            modelUploadProgressTrack.setAttribute('aria-valuenow', safePercent);
+        }
+
+        function submitModelUpload(formData, sourceExtension, fileName) {
+            return new Promise((resolve, reject) => {
+                const request = new XMLHttpRequest();
+                request.open('POST', saveUrl);
+                request.setRequestHeader('Accept', 'application/json');
+                request.setRequestHeader('X-CSRF-TOKEN', csrfToken);
+
+                request.upload.addEventListener('progress', event => {
+                    if (!event.lengthComputable) {
+                        setModelUploadProgress(0, `Uploading ${fileName}...`, 'processing');
+                        return;
+                    }
+
+                    const percent = Math.min(100, (event.loaded / event.total) * 100);
+                    setModelUploadProgress(percent, `Uploading ${fileName}...`);
+                    uploadModelButton.textContent = `Uploading ${Math.round(percent)}%`;
+                    updateStatus(`Uploading ${fileName}: ${Math.round(percent)}%`);
+                });
+
+                request.upload.addEventListener('load', () => {
+                    const nextStep = ['dwg', 'skp', 'dae'].includes(sourceExtension)
+                        ? `Upload complete. Converting ${sourceExtension.toUpperCase()} to GLB...`
+                        : 'Upload complete. Saving model...';
+                    setModelUploadProgress(100, nextStep, 'processing');
+                    uploadModelButton.textContent = ['dwg', 'skp', 'dae'].includes(sourceExtension) ? 'Converting...' : 'Saving...';
+                    updateStatus(nextStep);
+                });
+
+                request.addEventListener('load', () => {
+                    let result = {};
+
+                    try {
+                        result = JSON.parse(request.responseText || '{}');
+                    } catch (error) {
+                        reject(new Error('The server returned an invalid upload response.'));
+                        return;
+                    }
+
+                    resolve({ ok: request.status >= 200 && request.status < 300, result });
+                });
+                request.addEventListener('error', () => reject(new Error('The upload was interrupted. Check the connection and try again.')));
+                request.addEventListener('abort', () => reject(new Error('The upload was cancelled.')));
+                request.send(formData);
+            });
+        }
+
+        uploadModelButton.addEventListener('click', () => uploadModelFile.click());
+        uploadModelFile.addEventListener('change', async () => {
+            const files = [...uploadModelFile.files];
+            const modelFiles = files.filter(file => ['dwg', 'skp', 'dae', 'glb', 'gltf'].includes(file.name.split('.').pop()?.toLowerCase()));
+
+            if (!files.length) return;
+
+            if (modelFiles.length !== 1) {
+                updateStatus('Select exactly one DWG, SKP, DAE, GLB, or GLTF model file.');
+                uploadModelFile.value = '';
+                return;
+            }
+
+            const sourceExtension = modelFiles[0].name.split('.').pop()?.toLowerCase();
+
+            if (['dwg', 'skp', 'dae', 'glb'].includes(sourceExtension) && files.length !== 1) {
+                updateStatus(`${sourceExtension.toUpperCase()} accepts one file at a time.`);
+                uploadModelFile.value = '';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('type', 'uploadModel');
+            files.forEach(file => formData.append('model_files[]', file));
+            uploadModelButton.disabled = true;
+            uploadModelButton.textContent = 'Uploading 0%';
+            setModelUploadProgress(0, `Uploading ${modelFiles[0].name}...`);
+            updateStatus(`Uploading ${modelFiles[0].name}: 0%`);
+
+            try {
+                const response = await submitModelUpload(formData, sourceExtension, modelFiles[0].name);
+                const result = response.result;
+
+                if (!response.ok) {
+                    const validationMessage = Object.values(result.errors ?? {}).flat()[0];
+                    throw new Error(validationMessage ?? result.message ?? 'Could not upload the model.');
+                }
+
+                const asset = result.asset;
+                modelLibrary.push(asset);
+                assetsByKey.set(asset.key, asset);
+                document.getElementById('model-library-empty')?.remove();
+
+                const card = document.createElement('button');
+                card.className = 'library-card';
+                card.type = 'button';
+                card.dataset.addAsset = asset.key;
+
+                const icon = document.createElement('span');
+                icon.className = 'library-card-icon';
+                icon.setAttribute('aria-hidden', 'true');
+                icon.innerHTML = '&#11041;';
+                card.append(icon, document.createTextNode(asset.label));
+                bindLibraryCard(card);
+                modelLibraryGrid.appendChild(card);
+                setModelUploadProgress(100, `${asset.label} is ready.`);
+                uploadProgressHideTimer = setTimeout(() => {
+                    modelUploadProgress.hidden = true;
+                }, 1800);
+                updateStatus(`${asset.label} uploaded. Click it to add it to the scene.`);
+            } catch (error) {
+                console.error('Could not upload the playground model:', error);
+                setModelUploadProgress(Number(modelUploadProgressTrack.getAttribute('aria-valuenow')) || 0, error.message, 'error');
+                updateStatus(error.message);
+            } finally {
+                uploadModelButton.disabled = false;
+                uploadModelButton.textContent = 'Upload model';
+                uploadModelFile.value = '';
+            }
         });
 
         new ResizeObserver(() => {

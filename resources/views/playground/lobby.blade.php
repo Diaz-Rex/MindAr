@@ -74,6 +74,7 @@
     min-height:208px;
     padding:20px;
     place-items:center;
+    overflow:hidden;
     border-radius:12px;
     background:linear-gradient(145deg,#f8fbff,#edf5ff)
 }
@@ -86,16 +87,43 @@
     border-radius:8px;
     background:#fff
 }
+.qr-hover-preview {
+    position:fixed;
+    z-index:1000;
+    inset:0;
+    display:grid;
+    visibility:hidden;
+    place-items:center;
+    padding:24px;
+    background:rgba(15,23,42,.72);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .16s ease,visibility .16s ease
+}
+.qr-hover-preview.visible {
+    visibility:visible;
+    opacity:1
+}
+.qr-hover-preview img {
+    display:block;
+    width:min(88vmin,900px);
+    height:min(88vmin,900px);
+    object-fit:contain;
+    background:#fff;
+    box-shadow:0 24px 80px rgba(0,0,0,.4)
+}
 .qr-details {
     padding:15px 2px 2px
 }
-.qr-download-form {
+.qr-card-actions {
     position:absolute;
     z-index:2;
     top:20px;
-    right:20px
+    right:20px;
+    display:flex;
+    gap:7px
 }
-.qr-download-button {
+.qr-icon-button {
     display:grid;
     width:36px;
     height:36px;
@@ -110,9 +138,25 @@
     font-size:18px;
     font-weight:900
 }
-.qr-download-button:hover {
+.qr-icon-button:hover {
     border-color:#2563eb;
     background:#eaf2ff
+}
+.qr-delete-button {
+    color:#dc2626
+}
+.qr-delete-button:hover {
+    border-color:#ef4444;
+    background:#fef2f2
+}
+.qr-icon-button svg {
+    width:18px;
+    height:18px;
+    fill:none;
+    stroke:currentColor;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+    stroke-width:2
 }
 .qr-name {
     display:block;
@@ -267,15 +311,27 @@
         <section class="qr-grid" aria-label="Your playgrounds">
             @foreach ($playgrounds as $playground)
                 <article class="qr-card">
-                    <form class="qr-download-form" method="POST" action="{{ route('mind-ar.playground') }}">
-                        @csrf
-                        <input name="type" type="hidden" value="downloadQr">
-                        <input name="qr_token" type="hidden" value="{{ $playground->qr_token }}">
-                        <button class="qr-download-button" type="submit" title="Download QR as PNG" aria-label="Download {{ $playground->name }} QR as PNG">&#8681;</button>
-                    </form>
+                    <div class="qr-card-actions">
+                        <form method="POST" action="{{ route('mind-ar.playground') }}">
+                            @csrf
+                            <input name="type" type="hidden" value="downloadQr">
+                            <input name="qr_token" type="hidden" value="{{ $playground->qr_token }}">
+                            <button class="qr-icon-button" type="submit" title="Download QR as PNG" aria-label="Download {{ $playground->name }} QR as PNG">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ route('mind-ar.playground') }}" data-delete-playground="{{ $playground->name }}">
+                            @csrf
+                            <input name="type" type="hidden" value="delete">
+                            <input name="qr_token" type="hidden" value="{{ $playground->qr_token }}">
+                            <button class="qr-icon-button qr-delete-button" type="submit" title="Delete playground" aria-label="Delete {{ $playground->name }}">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+                            </button>
+                        </form>
+                    </div>
                     <a class="qr-card-link" href="{{ route('mind-ar.playground.build', $playground) }}" aria-label="Open {{ $playground->name }}">
                         <span class="qr-image">
-                            <img src="{{ $playground->qr_code }}" alt="QR code for {{ $playground->name }}">
+                            <img src="{{ $playground->qr_code }}" alt="QR code for {{ $playground->name }}" data-qr-preview>
                         </span>
                         <span class="qr-details">
                             <span class="qr-name">{{ $playground->name }}</span>
@@ -286,6 +342,10 @@
             @endforeach
         </section>
     @endif
+
+    <div id="qr-hover-preview" class="qr-hover-preview" aria-hidden="true">
+        <img src="" alt="">
+    </div>
 
     <dialog id="create-playground-dialog" class="create-dialog" aria-labelledby="create-playground-title">
         <div class="dialog-heading">
@@ -310,6 +370,8 @@
     <script>
         const createDialog = document.getElementById('create-playground-dialog');
         const nameInput = document.getElementById('playground-name');
+        const qrHoverPreview = document.getElementById('qr-hover-preview');
+        const qrHoverPreviewImage = qrHoverPreview.querySelector('img');
 
         document.querySelectorAll('[data-open-create]').forEach(button => {
             button.addEventListener('click', () => {
@@ -324,6 +386,30 @@
 
         createDialog.addEventListener('click', event => {
             if (event.target === createDialog) createDialog.close();
+        });
+
+        document.querySelectorAll('[data-delete-playground]').forEach(form => {
+            form.addEventListener('submit', event => {
+                const playgroundName = form.dataset.deletePlayground;
+
+                if (!window.confirm(`Delete "${playgroundName}" and all of its models and MindAR data?`)) {
+                    event.preventDefault();
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-qr-preview]').forEach(qrImage => {
+            qrImage.addEventListener('mouseenter', () => {
+                qrHoverPreviewImage.src = qrImage.src;
+                qrHoverPreviewImage.alt = qrImage.alt;
+                qrHoverPreview.classList.add('visible');
+            });
+
+            qrImage.addEventListener('mouseleave', () => {
+                qrHoverPreview.classList.remove('visible');
+                qrHoverPreviewImage.src = '';
+                qrHoverPreviewImage.alt = '';
+            });
         });
 
         @if ($errors->has('name'))

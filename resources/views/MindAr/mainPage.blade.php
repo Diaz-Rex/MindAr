@@ -5,11 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ $playground?->name ?? 'MindAR Card' }}</title>
 
-    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
-    @if (! $playground)
+    @if ($playground)
+        <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    @else
         <script src="/vendor/jsqr/jsQR-1.4.0.js"></script>
     @endif
+    @if ($playground)
     <script>
         AFRAME.registerComponent('normalize-playground-model', {
             init: function () {
@@ -47,6 +49,7 @@
             }
         });
     </script>
+    @endif
 
     <style>
         html,
@@ -63,6 +66,13 @@
             inset:0;
             width:100%;
             height:100%
+        }
+        #qr-camera {
+            position:fixed;
+            inset:0;
+            width:100%;
+            height:100%;
+            object-fit:cover
         }
         .a-enter-vr {
             display:none!important
@@ -133,14 +143,15 @@
         <div class="viewer-empty">This playground does not have a saved visible scene yet.</div>
     @endif
 
-    <a-scene
-        mindar-image="imageTargetSrc: {{ $mindArConfig['target'] }}; autoStart: {{ $mindArConfig['target_ready'] ? 'true' : 'false' }};"
-        color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: true;"
-        vr-mode-ui="enabled: false"
-        xr-mode-ui="enabled: false"
-        device-orientation-permission-ui="enabled: false"
-    >
+    @if ($playground)
+        <a-scene
+            mindar-image="imageTargetSrc: {{ $mindArConfig['target'] }}; autoStart: {{ $mindArConfig['target_ready'] ? 'true' : 'false' }};"
+            color-space="sRGB"
+            renderer="colorManagement: true; physicallyCorrectLights: true;"
+            vr-mode-ui="enabled: false"
+            xr-mode-ui="enabled: false"
+            device-orientation-permission-ui="enabled: false"
+        >
         <a-assets timeout="30000">
             @foreach ($modelAssets as $asset)
                 <a-asset-item id="model-asset-{{ $asset['id'] }}" src="{{ $asset['url'] }}"></a-asset-item>
@@ -155,7 +166,7 @@
             <a-entity
                 id="saved-playground-scene"
                 position="0 0 0.03"
-                rotation="0 0 0"
+                rotation="90 0 0"
                 scale="{{ $mindArConfig['scene_scale'] }} {{ $mindArConfig['scene_scale'] }} {{ $mindArConfig['scene_scale'] }}"
             >
                 @foreach ($sceneObjects as $object)
@@ -170,11 +181,15 @@
                 @endforeach
             </a-entity>
         </a-entity>
-    </a-scene>
+        </a-scene>
+    @else
+        <video id="qr-camera" autoplay muted playsinline></video>
+    @endif
 
     <script>
         const sceneElement = document.querySelector('a-scene');
         const imageTarget = document.getElementById('image-target');
+        const qrCamera = document.getElementById('qr-camera');
         const viewerStatus = document.getElementById('viewer-status');
         const usesPlaygroundQr = @json((bool) $playground);
         const sceneModels = [...document.querySelectorAll('#saved-playground-scene a-gltf-model')];
@@ -193,7 +208,7 @@
             qrScanTimer = window.setInterval(() => {
                 if (qrScanBusy || qrRedirecting) return;
 
-                const video = document.querySelector('video');
+                const video = qrCamera ?? document.querySelector('video');
 
                 if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
 
@@ -217,6 +232,7 @@
                     if (scannedUrl.host !== window.location.host || !playgroundPath.test(scannedUrl.pathname)) return;
 
                     qrRedirecting = true;
+                    qrCamera?.srcObject?.getTracks().forEach(track => track.stop());
                     viewerStatus.textContent = 'Playground QR found · Opening AR scene…';
                     window.location.assign(scannedUrl.pathname);
                 } catch (error) {
@@ -227,14 +243,38 @@
             }, 350);
         }
 
-        sceneElement.addEventListener('arReady', () => {
+        async function startGenericQrCamera() {
+            if (usesPlaygroundQr || !qrCamera) return;
+
+            if (!navigator.mediaDevices?.getUserMedia) {
+                viewerStatus.textContent = 'Camera is not available in this browser';
+                return;
+            }
+
+            try {
+                qrCamera.srcObject = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: 'environment' }
+                    }
+                });
+                await qrCamera.play();
+                viewerStatus.textContent = 'Camera ready · Scanning for a playground QR code';
+                startPlaygroundQrScanner();
+            } catch (error) {
+                console.error('Could not start the QR camera:', error);
+                viewerStatus.textContent = 'Camera could not start · Check browser permission';
+            }
+        }
+
+        sceneElement?.addEventListener('arReady', () => {
             viewerStatus.textContent = usesPlaygroundQr
                 ? 'Camera ready · Point at the playground QR card'
                 : 'Camera ready · Scanning for a playground QR code';
             startPlaygroundQrScanner();
         });
 
-        sceneElement.addEventListener('arError', () => {
+        sceneElement?.addEventListener('arError', () => {
             viewerStatus.textContent = 'Camera could not start · Check browser permission';
         });
 
@@ -252,17 +292,19 @@
             });
         });
 
-        imageTarget.addEventListener('targetFound', () => {
+        imageTarget?.addEventListener('targetFound', () => {
             targetIsVisible = true;
             viewerStatus.textContent = `Scene found · ${loadedModelCount}/${sceneModels.length} models loaded`;
         });
 
-        imageTarget.addEventListener('targetLost', () => {
+        imageTarget?.addEventListener('targetLost', () => {
             targetIsVisible = false;
             viewerStatus.textContent = usesPlaygroundQr
                 ? 'Point the camera at the playground QR card'
                 : 'Scanning for a playground QR code';
         });
+
+        startGenericQrCamera();
     </script>
 </body>
 </html>
