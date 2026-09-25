@@ -1,13 +1,14 @@
 <?php
 
-use App\Http\Controllers\MindArController;
-use App\Http\Controllers\PlayGroundController;
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthorityController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\SessionsController;
+use App\Http\Controllers\MindArController;
+use App\Http\Controllers\PlayGroundController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\SessionsController;
+use App\Http\Controllers\ZohoMainController;
 use App\Http\Middleware\ForceMindArHttps;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -29,6 +30,7 @@ use App\Http\Middleware\ForceMindArHttps;
 Route::get('/sign-in', [SessionsController::class, 'create'])->middleware('guest')->name('login');
 Route::post('/sign-in', [SessionsController::class, 'store'])->middleware('guest');
 Route::get('/mindar', [MindArController::class, 'index'])->middleware(ForceMindArHttps::class)->name('mind-ar.index');
+Route::get('/mindar/{playground:qr_token}', [MindArController::class, 'index'])->middleware(ForceMindArHttps::class)->name('mind-ar.playground.viewer');
 
 /*
 |--------------------------------------------------------------------------
@@ -45,6 +47,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/sign-out', [SessionsController::class, 'destroy'])->name('logout');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::put('/profile', [ProfileController::class, 'update'])->name('profile.update');
-    Route::match(['get', 'post'], '/superadmin/authority', [AuthorityController::class, 'authority'])->name('superadmin.authority');
-    Route::get('/playground', [PlayGroundController::class, 'index'])->name('mind-ar.playground');
+    Route::get('/superadmin/authority', [AuthorityController::class, 'authority'])->name('superadmin.authority');
+    Route::post('/superadmin/authority', [AuthorityController::class, 'authority']);
+    Route::get('/playground', [PlayGroundController::class, 'lobby'])->name('mind-ar.playground');
+    Route::post('/playground', [PlayGroundController::class, 'lobby']);
+    Route::get('/playground/{playground:qr_token}/build', [PlayGroundController::class, 'index'])->name('mind-ar.playground.build');
+    Route::get('/zoho/auth', [ZohoMainController::class, 'redirectToZoho'])->name('zoho.auth');
+    Route::get('/zoho/callback', [ZohoMainController::class, 'handleCallback'])->name('zoho.callback');
 });

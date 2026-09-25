@@ -31,4 +31,23 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'zoho' => [
+        'client_id' => env('ZOHO_CLIENT_ID'),
+        'client_secret' => env('ZOHO_CLIENT_SECRET'),
+        'redirect_uri' => env('ZOHO_REDIRECT_URI'),
+        'accounts_url' => env('ZOHO_ACCOUNTS_URL', 'https://accounts.zoho.com'),
+        'api_base' => env('ZOHO_API_BASE', 'https://www.zohoapis.com'),
+        'workdrive_api_base' => env('ZOHO_WORKDRIVE_API_BASE', 'https://www.zohoapis.com/workdrive/api/v1'),
+        'accounts_urls' => [
+            'US' => 'https://accounts.zoho.com',
+            'EU' => 'https://accounts.zoho.eu',
+            'IN' => 'https://accounts.zoho.in',
+            'AU' => 'https://accounts.zoho.com.au',
+            'JP' => 'https://accounts.zoho.jp',
+            'CA' => 'https://accounts.zohocloud.ca',
+            'SA' => 'https://accounts.zoho.sa',
+            'UK' => 'https://accounts.zoho.uk',
+        ],
+    ],
+
 ];

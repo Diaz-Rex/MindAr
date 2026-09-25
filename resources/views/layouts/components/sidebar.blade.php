@@ -31,7 +31,7 @@
         @endif
 
         @if ($permissions->contains('linkName', 'playground'))
-            <a class="nav-link {{ request()->routeIs('mind-ar.playground') ? 'active' : '' }}" href="{{ route('mind-ar.playground') }}">
+            <a class="nav-link {{ request()->routeIs('mind-ar.playground*') ? 'active' : '' }}" href="{{ route('mind-ar.playground') }}">
                 <span class="nav-icon">⌘</span>Playground
             </a>
         @endif

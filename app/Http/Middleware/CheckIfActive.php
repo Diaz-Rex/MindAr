@@ -13,7 +13,7 @@ class CheckIfActive
         Request $request,
         Closure $next
     ): Response {
-        if (Auth::guest() || $request->is('mindar')) {
+        if (Auth::guest() || $request->is('mindar', 'mindar/*')) {
             return $next($request);
         }
 

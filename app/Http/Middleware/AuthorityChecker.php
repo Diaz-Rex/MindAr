@@ -18,7 +18,7 @@ class AuthorityChecker
          * Guests do not have authority records.
          * The route's auth middleware protects private pages.
          */
-        if (Auth::guest() || $request->is('mindar')) {
+        if (Auth::guest() || $request->is('mindar', 'mindar/*', 'zoho', 'zoho/*')) {
             return $next($request);
         }
 
@@ -30,11 +30,11 @@ class AuthorityChecker
         }
 
         $permissions = AuthorityModel::join(
-                'table_urls',
-                'table_urls.id',
-                '=',
-                'authority.linkName_id'
-            )
+            'table_urls',
+            'table_urls.id',
+            '=',
+            'authority.linkName_id'
+        )
             ->where('authority.user_id', Auth::id())
             ->get();
 
@@ -44,7 +44,7 @@ class AuthorityChecker
             );
 
             $childMatch = $request->is(
-                $permission->linkName . '/*'
+                $permission->linkName.'/*'
             );
 
             if ($exactMatch || $childMatch) {
